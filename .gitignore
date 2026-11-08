@@ -1,0 +1,45 @@
+# Driving data and anything derived from it are never committed: no video frames,
+# features, checkpoints, per-frame predictions, coordinates or session lists.
+*.npy
+*.npz
+*.memmap
+*.h5
+*.hdf5
+*.parquet
+*.feather
+*.pkl
+*.pickle
+*.zarr/
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.mp4
+*.webm
+*.mov
+*.avi
+*.mkv
+*.m4v
+*.jpg
+*.jpeg
+*.gif
+*.png
+*.csv
+*.json
+*.log
+splits/
+results/
+logs/
+# Report figures are allowed, but never ones that show video frames.
+!figures/*.png
+!figures/*.svg
+
+# Python and editor files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+venv/
+.venv/
+.idea/
+.vscode/
+.DS_Store
