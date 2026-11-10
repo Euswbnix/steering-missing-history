@@ -12,6 +12,21 @@ from models import SteeringModel, forward_masked
 MODEL_NAMES = ("single_frame", "lstm", "cfc", "ltc", "transformer")
 
 
+def _plain(value):
+    """Replace NumPy scalars with Python numbers, inside dicts, lists and tuples too.
+
+    torch.load(weights_only=True) rejects NumPy scalars, so a checkpoint saved with
+    them, for example a learning rate taken from a NumPy grid, could not be loaded.
+    """
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_plain(item) for item in value)
+    return value
+
+
 @dataclass(frozen=True)
 class TrainConfig:
     lr: float = 3e-4
@@ -21,6 +36,11 @@ class TrainConfig:
     batch_size: int = 256
     keep_rates: tuple = (1.0, 0.5, 0.25)
     ode_unfolds: int = 24
+
+    def __post_init__(self):
+        for name in ("lr", "seed", "epochs", "patience", "batch_size", "ode_unfolds"):
+            object.__setattr__(self, name, _plain(getattr(self, name)))
+        object.__setattr__(self, "keep_rates", tuple(_plain(k) for k in self.keep_rates))
 
     def validate(self):
         if not np.isfinite(self.lr) or self.lr <= 0:
@@ -125,8 +145,8 @@ def fit(model_name, train_data, val_data, *, config=None, checkpoint_path=None):
             break
     checkpoint = dict(format_version=1, model_config=model_config, model=best_state,
                       target_mean=mean.cpu(), target_std=std.cpu(),
-                      data_config=dict(task=train_data.task, horizons=list(train_data.horizons),
-                                       steps=train_data.steps, max_step=train_data.max_step),
+                      data_config=_plain(dict(task=train_data.task, horizons=list(train_data.horizons),
+                                             steps=train_data.steps, max_step=train_data.max_step)),
                       train_config=asdict(config), best_epoch=best_epoch,
                       best_score=best_score, history=history, parameter_counts=model.blocks())
     if path is not None:

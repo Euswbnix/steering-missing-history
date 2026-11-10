@@ -118,3 +118,20 @@ def test_all_model_parameter_counts(kind, count):
     counts = SteeringModel(kind, 1536, ode_unfolds=24).blocks()
     assert counts == dict(projection=98368, temporal=count, readout=65,
                           temporal_frozen=8192 if kind == "ltc" else 0)
+
+
+def test_numpy_settings_still_save_a_loadable_checkpoint(tmp_path):
+    cache = make_cache(tmp_path / "cache")
+    max_step = np.float64(0.2)
+    train = FeatureCache(cache, "train", steps=6, max_step=max_step)
+    val = FeatureCache(cache, "val", steps=6, max_step=max_step)
+    config = TrainConfig(lr=np.float64(3e-4), seed=np.int64(3), epochs=1, patience=1,
+                         batch_size=64, keep_rates=tuple(np.array([1.0, 0.5, 0.25])))
+    path = tmp_path / "outputs" / "lstm.pt"
+    checkpoint = fit("lstm", train, val, config=config, checkpoint_path=path)
+    loaded = Predictor(path)
+    f, t, _ = next(FeatureCache(cache, "test", steps=6).batches(64))
+    np.testing.assert_array_equal(loaded.predict(f, t), Predictor(checkpoint).predict(f, t))
+    assert type(checkpoint["train_config"]["lr"]) is float
+    assert type(checkpoint["train_config"]["seed"]) is int
+    assert type(checkpoint["data_config"]["max_step"]) is float
