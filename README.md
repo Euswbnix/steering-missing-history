@@ -5,9 +5,10 @@ Transformer. A single-frame MLP provides a no-history baseline. Inputs are
 precomputed visual features and camera timestamps; outputs are steering-wheel
 angles in degrees, for the current frame or at 0, 0.5, 1 and 2 seconds ahead.
 
-The public interface consists of model definitions, a feature-cache reader,
-one-run training and checkpoint inference. Users write their own experiment
-drivers for learning-rate selection, repeated seeds and evaluation.
+The reported results were produced with the original scripts in
+[`experiments/`](experiments/). For a single run, [`training.py`](training.py)
+and [`inference.py`](inference.py) provide equivalent training and prediction
+interfaces with a simpler checkpoint format.
 
 ## Installation
 
@@ -78,6 +79,7 @@ batch order as `FeatureCache.labels()` when scoring.
 - `training.py`: train one configuration and select its best validation weights.
 - `inference.py`: restore the model and return predictions in degrees.
 - `metrics.py`: the macro MAE used for checkpoint selection.
+- `experiments/`: original training, evaluation, statistical analysis and timing scripts.
 - `docs/`: [input format](docs/data.md), [architectures](docs/models.md),
   [experiment settings](docs/experiments.md) and [reported results](docs/results.md).
 
@@ -93,8 +95,7 @@ model parameter counts, causal attention, timestamp handling, labels, training
 and checkpoint inference. No driving data or GPU is needed.
 
 The Honda HDD videos, CAN records, feature caches, split manifest and trained
-weights are not distributed here. Researchers must obtain dataset access and
-prepare the documented inputs. The code consumes frozen features; image decoding,
-feature extraction and statistical experiment orchestration are outside this
-package. See [docs/experiments.md](docs/experiments.md) for the settings needed
-to write a reproduction driver and the limits of exact reproduction.
+weights are not distributed here. The experiment scripts take frozen features
+in the [documented cache format](docs/data.md). See
+[docs/experiments.md](docs/experiments.md) for the scripts and settings used
+to produce the reported results and the data needed to reproduce them.

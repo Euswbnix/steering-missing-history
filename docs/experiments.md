@@ -1,8 +1,7 @@
 # Experiment settings
 
-This is a standalone description of the experiments behind the reported results,
-and a configuration guide for writing a reproduction driver. It is a release
-summary, not a newly timestamped preregistration.
+This release summary documents the settings used by the
+[original experiment scripts](../experiments/) to produce the reported results.
 
 ## Data and models
 
@@ -46,10 +45,17 @@ Selected learning rates:
 | Current-angle prediction | Not used | 3e-4 | 1e-4 | 1e-3 | 3e-4 |
 | Anticipation | 1e-3 | 1e-3 | 1e-4 | 3e-4 | 1e-4 |
 
-`training.fit` performs one seed and learning rate. Write the surrounding loops
-and logging as needed. Its selected checkpoint records all architecture arguments,
-target scaling, window settings, hyperparameters and validation history. Inference
-restores these values directly from the checkpoint.
+The original drivers are [`sparse_run.py`](../experiments/sparse_run.py) for
+current angles and [`anticipation_run.py`](../experiments/anticipation_run.py)
+for the four anticipation horizons. For each model, the `lr` stage selects the
+learning rate on validation data; the `final` stage uses that rate across the
+specified seeds. Both drivers default to the validation split. To match the
+reported current-angle LTC runs, pass `--ode-unfolds 24` to `sparse_run.py`.
+Keep outputs outside the repository.
+
+For one seed and learning rate, `training.fit` saves the selected model with
+its architecture, target scaling, window settings, hyperparameters and validation
+history. `inference.Predictor` restores that checkpoint for prediction.
 
 ## Evaluation
 
@@ -64,8 +70,11 @@ The reported uncertainty analysis resampled seeds and route groups in two levels
 with 10,000 bootstrap replicates and sensitivity checks grouped by session and
 date. The current-angle primary comparison was CfC minus LSTM under 75% history
 removal, using a predeclared practical-equivalence bound of +/-0.5 degrees.
-Secondary comparisons used Holm correction. Analysis and experiment drivers are
-written by the reproducing researcher.
+Secondary comparisons used Holm correction. The analyses of saved predictions
+are in [`sparse_analyze.py`](../experiments/sparse_analyze.py) for current angles
+and [`anticipation_analyze.py`](../experiments/anticipation_analyze.py) for
+anticipation. [`sparse_cost.py`](../experiments/sparse_cost.py) measures the
+computational cost of the LSTM, CfC and LTC temporal blocks.
 
 ## Interpretation and reproduction limits
 
