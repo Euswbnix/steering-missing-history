@@ -20,6 +20,30 @@ python -m pip install -r requirements.txt
 Run the examples from this directory. The numerical reference for CfC and the
 LTC cell both use `ncps==1.0.1`.
 
+## Model architecture
+
+![Steering prediction architecture. The four temporal models support both tasks. The single-frame MLP is used only for anticipation.](figures/architecture.svg)
+
+Each model is trained separately for its task. Frame times come from the
+original timestamps after history sampling. LSTM takes elapsed time as an
+extra input, CfC uses it in its gate, and LTC integrates each interval in
+24 substeps. The Transformer encodes time relative to the current frame.
+
+### Trainable parameters
+
+| Model | Model block | Input projection | Current-angle total | Anticipation total |
+|---|---:|---:|---:|---:|
+| LSTM | 33,536 | 98,368 | 131,969 | 132,164 |
+| CfC | 33,024 | 98,368 | 131,457 | 131,652 |
+| LTC | 33,216 | 98,368 | 131,649 | 131,844 |
+| Transformer | 33,472 | 98,368 | 131,905 | 132,100 |
+| Single-frame MLP | 33,088 | 98,368 | — | 131,716 |
+
+Totals include the model block, input projection and linear readout. The
+readout has 65 parameters for the current angle and 260 for anticipation.
+The counts exclude the frozen DINOv2 encoder and LTC's 8,192 frozen mask
+entries. The single-frame baseline was used only for anticipation.
+
 ## Train one model
 
 Prepare the cache described in [docs/data.md](docs/data.md). Replace the paths
