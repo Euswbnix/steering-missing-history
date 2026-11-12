@@ -2,7 +2,9 @@
      role="img" aria-labelledby="title description">
   <title id="title">Steering prediction with missing history frames</title>
   <desc id="description">Frozen DINOv2 features pass through history sampling and a shared
-    projection. Each temporal model can predict the current angle or four anticipation
+    projection. LSTM, CfC and LTC use the time between successive retained frames.
+    The Transformer uses timestamps relative to the current frame.
+    Each temporal model can predict the current angle or four anticipation
     horizons. The single-frame MLP is used only for anticipation. Each readout is
     rescaled to steering-wheel degrees.</desc>
   <defs>
@@ -45,6 +47,8 @@
   </g>
 
   <g aria-label="Model alternatives">
+    <path class="flow" stroke-dasharray="5 4" d="M345 95 V105 H238 V140"/>
+    <text class="label" x="36" y="131">Δt between retained frames</text>
     <path class="flow" d="M748 115 H282 V140"/>
     <path class="flow" d="M748 95 V140"/>
     <circle cx="748" cy="115" r="3" fill="#415768"/>
