@@ -1,0 +1,263 @@
+"""Metrics, with a MUST-FIRE case for every property that matters.
+
+Written this way on purpose. In the previous round almost every bug was in checking code
+rather than in the code being checked -- a revisit audit that could not answer its own
+question, a stripe detector that fired twice on noise -- and the common cause was testing
+only that each check stayed quiet on good input. Every assertion below therefore has a
+partner that constructs input on which it MUST fail.
+"""
+
+import pathlib
+import sys
+
+import numpy as np
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "experiments"))
+from experiment_metrics import (BIN_NAMES, bin_masks, count_turn_events, false_alarm_rate,
+                     macro_mae,
+                     mae_by_window_position, macro_skill, per_bin, persistence, pearson_r,
+                     summary)
+
+
+# ------------------------------------------------------------------ turn events ----
+
+def test_turn_events_merge_short_gaps_and_separate_long_ones():
+    m = np.zeros(200, bool)
+    m[10:20] = True
+    m[25:35] = True          # 5-frame gap -> same event
+    m[100:110] = True        # 65-frame gap -> separate
+    assert count_turn_events(m) == 2
+
+
+def test_turn_events_must_not_report_one_corner_as_many_samples():
+    """MUST-FIRE: 200 contiguous frames are ONE event. If this ever returns ~200 the count
+    has become a frame count and every table's support column is wrong."""
+    assert count_turn_events(np.ones(200, bool)) == 1
+    assert count_turn_events(np.zeros(200, bool)) == 0
+
+
+# ---------------------------------------------------------------------- binning ----
+
+def test_bins_are_assigned_by_ground_truth_not_prediction():
+    """MUST-FIRE: a constant-zero predictor must still populate the curve bin. Binning by
+    prediction would leave it empty and hide the failure instead of scoring it."""
+    true = np.array([0.0, 8.0, 30.0, 80.0])
+    names = [n for n, m in bin_masks(true) if m.any()]
+    assert "curve [15,inf)" in names
+    rows = per_bin(np.zeros(4), true)
+    assert rows["curve [15,inf)"]["n_frames"] == 2
+    assert rows["curve [15,inf)"]["mae_model"] == pytest.approx(55.0)
+
+
+def test_diagnostic_bin_is_reported_but_is_not_a_primary_bin():
+    true = np.array([0.0, 8.0, 30.0, 80.0])
+    rows = per_bin(np.zeros(4), true)
+    diag = [k for k in rows if k.startswith("(diagnostic)")]
+    assert len(diag) == 1 and rows[diag[0]]["n_frames"] == 1
+    assert diag[0] not in BIN_NAMES
+    # and it must NOT enter the headline scalar: 2 test events is not a measurement
+    assert sum(1 for k in rows if k in BIN_NAMES) == 3
+
+
+# -------------------------------------------------------------- the validity mask ----
+
+def test_invalid_frames_are_excluded_everywhere():
+    true = np.array([0.0, 0.0, 0.0, 80.0])
+    valid = np.array([True, True, False, True])
+    rows = per_bin(np.zeros(4), true, valid)
+    assert rows["straight [0,5)"]["n_frames"] == 2
+
+
+def test_the_mask_demonstrably_changes_the_answer():
+    """MUST-FIRE: a dropout is a label of exactly 0 recorded mid-corner. Included, it lands
+    in the straight bin and flatters predict-0 there. If masking ever becomes a no-op this
+    fails, which is the point -- the previous round's bugs all passed their own tests."""
+    true = np.concatenate([np.full(50, 80.0), [0.0], np.full(50, 80.0)])   # a dropout at 50
+    valid = np.ones(101, bool); valid[50] = False
+    pred = np.full(101, 80.0)
+    with_bad = per_bin(pred, true)
+    without = per_bin(pred, true, valid)
+    assert with_bad["straight [0,5)"]["n_frames"] == 1
+    assert without["straight [0,5)"]["n_frames"] == 0
+    assert with_bad["straight [0,5)"]["mae_model"] == pytest.approx(80.0)
+    assert np.isnan(without["straight [0,5)"]["mae_model"])
+
+
+# ------------------------------------------------------------------ macro skill ----
+
+def test_predict_zero_scores_exactly_zero():
+    """The property the headline scalar is chosen for: the baseline is pinned at 0, so the
+    score cannot be won by shrinking predictions toward the mean."""
+    rng = np.random.default_rng(0)
+    true = rng.normal(0, 30, 4000)
+    assert macro_skill(np.zeros_like(true), true) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_a_shrunken_predictor_cannot_win():
+    """MUST-FIRE: shrinkage is the failure mode binning exists to prevent. A predictor that
+    halves every target must NOT outscore one that is genuinely closer."""
+    rng = np.random.default_rng(1)
+    true = rng.normal(0, 30, 4000)
+    shrunk = 0.5 * true
+    honest = true + rng.normal(0, 3, 4000)
+    assert macro_skill(honest, true) > macro_skill(shrunk, true)
+    assert macro_skill(true, true) == pytest.approx(1.0)
+
+
+def test_the_diagnostic_row_is_a_subset_view_not_a_fourth_bin():
+    """Sharp frames are scored INSIDE the curve bin -- they are real data with real errors.
+    What is withheld is a headline number of their own. So the mean must run over exactly
+    three terms, and the >=40 row must not add a fourth.
+
+    MUST-FIRE both ways: the hand computation below pins the divisor at 3. If the diagnostic
+    row ever became a fourth term the value would move, and if sharp frames were dropped from
+    the curve bin instead the ratio would.
+    """
+    true = np.concatenate([np.full(300, 1.0), np.full(300, 8.0), np.full(300, 20.0),
+                           np.full(4, 200.0)])
+    pred = true.copy()
+    pred[-4:] = 0.0
+    rows = per_bin(pred, true)
+    assert rows["curve [15,inf)"]["n_frames"] == 304, "sharp frames must stay in the curve bin"
+    assert rows["(diagnostic) >=40"]["n_frames"] == 4
+    num = np.mean([rows[b]["mae_model"] for b in BIN_NAMES])
+    den = np.mean([rows[b]["mae_predict0"] for b in BIN_NAMES])
+    assert macro_skill(pred, true) == pytest.approx(1.0 - num / den)
+    assert macro_mae(pred, true) == pytest.approx(num)
+
+
+def test_a_catastrophe_confined_to_the_diagnostic_subset_still_costs_score():
+    """MUST-FIRE: the withheld headline number must not become a free pass. Blowing up on
+    the sharp frames has to show, because they are inside the curve bin."""
+    true = np.concatenate([np.full(300, 20.0), np.full(60, 200.0)])
+    good = macro_skill(true.copy(), true)
+    bad = true.copy(); bad[-60:] = 0.0
+    assert good == pytest.approx(1.0)
+    assert macro_skill(bad, true) < 0.8
+
+
+# -------------------------------------------------------------- other quantities ----
+
+def test_persistence_uses_the_previous_true_angle():
+    true = np.array([1.0, 2.0, 5.0])
+    assert list(persistence(true)) == [1.0, 1.0, 2.0]
+
+
+def test_pearson_and_false_alarm():
+    true = np.array([0.0, 1.0, 2.0, 3.0])
+    assert pearson_r(2 * true, true) == pytest.approx(1.0)
+    assert pearson_r(-true, true) == pytest.approx(-1.0)
+    # predict-0 aces the false-alarm rate by construction; say so rather than celebrate it
+    assert false_alarm_rate(np.zeros(4), true) == 0.0
+    assert false_alarm_rate(np.full(4, 50.0), true) == 1.0
+
+
+# ------------------------------------------- per-position curve and its self-test ----
+
+def test_a_length_invariant_model_gives_a_flat_position_curve():
+    """The headline figure's own self-test. A non-recurrent model has no state, so its error
+    cannot depend on position within the window; a sloped line would mean the position
+    accounting is broken, not that the CNN grew memory."""
+    rng = np.random.default_rng(2)
+    T, N = 16, 400
+    true = rng.normal(0, 20, (N, T))
+    pred = true + rng.normal(0, 4, (N, T))          # position-independent error
+    curve = mae_by_window_position(pred, true, np.ones((N, T), bool), T)
+    assert curve.shape == (T,)
+    assert curve.std() < 0.35, f"flat curve expected, got spread {curve.std():.3f}"
+
+
+def test_the_position_curve_detects_a_warm_up():
+    """MUST-FIRE: a recurrent model should improve with context. If the aggregation could
+    not see that, the headline figure would be decorative."""
+    rng = np.random.default_rng(3)
+    T, N = 16, 400
+    true = rng.normal(0, 20, (N, T))
+    noise = np.linspace(12.0, 1.0, T)[None, :]      # error shrinking with position
+    pred = true + rng.normal(0, 1, (N, T)) * noise
+    curve = mae_by_window_position(pred, true, np.ones((N, T), bool), T)
+    assert curve[0] > 3 * curve[-1]
+    assert np.all(np.diff(curve) < 1.0)
+
+
+def test_summary_is_serialisable_and_complete():
+    import json
+    rng = np.random.default_rng(4)
+    true = rng.normal(0, 25, 500)
+    s = summary(true + rng.normal(0, 5, 500), true)
+    json.dumps(s)
+    assert set(s) >= {"macro_skill", "global_mae", "pearson_r", "false_alarm_rate", "bins"}
+
+
+def test_the_scalar_is_not_dominated_by_the_easiest_bin():
+    """MUST-FIRE, and it did, on real runs rather than on a contrived example.
+
+    The first version averaged per-bin RATIOS. Predict-0's MAE is 2.33 deg in the validation
+    straight bin and 38.0 in the curve bin, so dividing per bin makes one degree of
+    straight-bin error cost sixteen times one degree of curve-bin error. The figures below
+    are the ones three models actually produced after five epochs -- every one of them beat
+    predict-0 where the errors are large, and every one scored between -0.46 and -0.94.
+
+    Averaging the MAEs first and dividing once puts the weight where the error is.
+    """
+    # reconstruct the measured situation: straight 6.0 vs 2.33, gentle 9.5 vs 8.95,
+    # curve 28.7 vs 38.0
+    true = np.concatenate([np.full(2000, 2.33), np.full(600, 8.95), np.full(400, 38.0)])
+    pred = np.concatenate([np.full(2000, 2.33 + 6.0), np.full(600, 8.95 + 9.5),
+                           np.full(400, 38.0 - 28.7)])
+    rows = per_bin(pred, true)
+    assert rows["curve [15,inf)"]["mae_model"] < rows["curve [15,inf)"]["mae_predict0"]
+    assert rows["straight [0,5)"]["mae_model"] > rows["straight [0,5)"]["mae_predict0"]
+
+    ratio_mean = 1.0 - np.mean([rows[b]["mae_model"] / rows[b]["mae_predict0"]
+                                for b in BIN_NAMES])
+    assert ratio_mean == pytest.approx(-0.464, abs=0.01), "the aggregation we removed"
+    assert macro_skill(pred, true) == pytest.approx(0.103, abs=0.01)
+    assert ratio_mean < 0 < macro_skill(pred, true)
+
+
+def test_shrinkage_is_still_punished_under_the_new_aggregation():
+    """The property the scalar was chosen for must survive the fix: halving every target
+    must still lose to predicting it, because the curve bin dominates an average of MAEs."""
+    rng = np.random.default_rng(7)
+    true = rng.normal(0, 30, 6000)
+    assert macro_skill(0.5 * true, true) < macro_skill(true + rng.normal(0, 3, 6000), true)
+    assert macro_skill(np.zeros_like(true), true) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_a_constant_predictor_is_reported_as_a_result_not_a_gap():
+    """MUST-FIRE. Collapse to the constant is this task's dominant failure mode -- measured,
+    the LSTM lands there at 1e-3, 3e-3 and 1e-2 across three seeds. A bare NaN Pearson r in a
+    results table reads as missing data when it means the model emits one number, which is
+    the most important thing that table could say."""
+    from experiment_metrics import constant_prediction
+    true = np.linspace(-40, 40, 500)
+    assert constant_prediction(np.full(500, 2.0))
+    assert not constant_prediction(true)
+    s = summary(np.full(500, 2.0), true)
+    assert s["constant_prediction"] is True
+    assert s["pred_std"] == pytest.approx(0.0)
+    assert np.isnan(s["pearson_r"])          # undefined, and now accompanied by the reason
+    assert summary(true, true)["constant_prediction"] is False
+
+
+def test_collapse_is_detected_and_is_not_just_a_nan():
+    """MUST-FIRE both ways. Collapse is this task's dominant outcome, so the detector has to
+    fire on a constant predictor AND stay quiet on a model that is merely bad."""
+    from experiment_metrics import collapsed
+    true = np.concatenate([np.full(600, 2.0), np.full(300, 9.0), np.full(300, 30.0)])
+
+    # a genuinely collapsed run: one number, whatever the input
+    assert collapsed(summary(np.full(1200, 1.5), true)) is True
+
+    # a bad but real model: large errors, but it moves with the target
+    noisy = true + np.random.default_rng(0).normal(0, 8, 1200)
+    s = summary(noisy, true)
+    assert s["pearson_r"] > 0.05
+    assert collapsed(s) is False, "a bad model is not a collapsed one"
+
+    # the trap: near-zero r but real variance, and curve MAE well under baseline.
+    # Must NOT count as collapse -- it is doing something in the bin that matters.
+    pred = true.copy(); pred[:600] = np.random.default_rng(1).normal(0, 20, 600)
+    assert collapsed(summary(pred, true)) is False

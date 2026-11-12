@@ -30,6 +30,7 @@
 splits/
 results/
 logs/
+swanlog/
 # Report figures are allowed, but never ones that show video frames.
 !figures/*.png
 !figures/*.svg

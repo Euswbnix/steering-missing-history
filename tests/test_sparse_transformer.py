@@ -1,0 +1,231 @@
+"""The supplementary Transformer (the preregistered plan), checked on
+synthetic input: parameter counts, padding that cannot leak into the prediction, a causal mask,
+real (not renumbered) times after frames are dropped, a target frame that is never dropped, and
+train/eval running the same maths. Also: the existing models ignore the new relative-time input."""
+import math
+import os
+import sys
+
+import numpy as np
+import pytest
+import torch
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "experiments"))
+import sparse_run  # noqa: E402
+
+DIM = 1536
+
+
+def model(kind="transformer", seed=0):
+    torch.manual_seed(seed)
+    return sparse_run.SteeringModel(kind, DIM, seed=seed).double()
+
+
+def batch(lengths, T=10, seed=1):
+    """Features, dt, valid and relative times for kept frames packed at the front, as
+    forward_masked produces them: irregular real times, the target frame last among the valid."""
+    g = torch.Generator().manual_seed(seed)
+    B = len(lengths)
+    f = torch.randn(B, T, DIM, generator=g, dtype=torch.float64)
+    valid = torch.arange(T)[None] < torch.tensor(lengths)[:, None]
+    rel = torch.zeros(B, T, dtype=torch.float64)
+    for b, n in enumerate(lengths):
+        gaps = 0.1 + 0.3 * torch.rand(n - 1, generator=g, dtype=torch.float64)
+        times = torch.cat([torch.zeros(1, dtype=torch.float64), gaps.cumsum(0)])
+        rel[b, :n] = times - times[-1]
+        rel[b, n:] = torch.randn(T - n, generator=g, dtype=torch.float64)       # garbage
+    dt = torch.zeros_like(rel)
+    dt[:, 1:] = (rel[:, 1:] - rel[:, :-1]).clamp(min=0)
+    return f, dt, valid, rel
+
+
+def test_parameter_counts_match_the_preregistration():
+    b = model().blocks()
+    assert b["temporal"] == 33_472
+    assert b["projection"] == 98_368
+    assert b["readout"] == 65
+    assert b["temporal"] + b["projection"] + b["readout"] == 131_905
+    assert b["temporal_frozen"] == 0
+
+
+def test_time_code_is_the_registered_sinusoid():
+    blk = sparse_run.TransformerBlock()
+    rel = torch.tensor([[-2.35, -0.4, 0.0]])
+    code = blk.time_code(rel)
+    p = rel / 0.1
+    for j in (0, 1, 7, 31):
+        w = 10000 ** (2 * j / 64)
+        assert torch.allclose(code[..., 2 * j], torch.sin(p / w), atol=1e-5)
+        assert torch.allclose(code[..., 2 * j + 1], torch.cos(p / w), atol=1e-5)
+    assert not any(n.startswith("rnn.inv_freq") for n in sparse_run.SteeringModel("transformer", DIM).state_dict())
+
+
+@pytest.mark.parametrize("train_mode", [False, True])
+def test_padding_values_cannot_change_the_prediction(train_mode):
+    m = model().train(train_mode)
+    f, dt, valid, rel = batch([10, 6, 3])
+    base = m(f, dt, valid, rel)
+    f2, rel2 = f.clone(), rel.clone()
+    f2[~valid] = 1e3 * torch.randn(int((~valid).sum()), DIM, dtype=torch.float64)
+    rel2[~valid] = -50 + 100 * torch.rand(int((~valid).sum()), dtype=torch.float64)
+    assert torch.allclose(m(f2, dt, valid, rel2), base, atol=1e-10)
+
+
+def test_attention_is_causal():
+    m = model().eval()
+    f, dt, valid, rel = batch([10])
+    x = m.proj(m.norm(f))
+    out = m.rnn(x, rel, valid)
+    x2 = x.clone()
+    x2[:, 6:] += 5.0                                  # change only frames after position 5
+    out2 = m.rnn(x2, rel, valid)
+    assert torch.allclose(out[:, :6], out2[:, :6], atol=1e-10)
+    assert not torch.allclose(out[:, 6:], out2[:, 6:])
+
+
+def test_train_and_eval_run_the_same_maths():
+    m = model()
+    f, dt, valid, rel = batch([10, 7, 2])
+    assert not torch.backends.mha.get_fastpath_enabled()
+    with torch.no_grad():
+        a = m.train()(f, dt, valid, rel)
+        b = m.eval()(f, dt, valid, rel)
+    assert torch.allclose(a, b, atol=1e-12)
+
+
+def test_times_after_dropping_are_the_real_ones_and_the_target_is_kept():
+    torch.manual_seed(0)
+    B, T = 64, 30
+    step = 0.1 + 0.1 * torch.rand(B, T, dtype=torch.float64)            # irregular sampling
+    t = 1000.0 + step.cumsum(1)
+    f = torch.randn(B, T, 8)
+    seen = {}
+
+    def spy(kf, dt, valid, rel):
+        seen.update(kf=kf, dt=dt, valid=valid, rel=rel)
+        return torch.zeros(len(kf))
+
+    gen = torch.Generator().manual_seed(7)
+    sparse_run.forward_masked(spy, f, t, 0.25, gen)
+    valid, rel = seen["valid"], seen["rel"].double()
+    last = valid.long().cumsum(1).argmax(1)
+    assert valid.all(1).logical_not().any()               # frames really were dropped
+    assert torch.equal(valid.long().cumsum(1)[torch.arange(B), last], valid.sum(1))
+    assert torch.all(rel[torch.arange(B), last].abs() < 1e-6)              # target is last, rel 0
+    for b in range(B):
+        n = int(valid[b].sum())
+        kept_times = rel[b, :n] + t[b, -1]
+        # every kept time is one of the window's original timestamps, in order: no renumbering
+        idx = [int(torch.argmin((t[b] - v).abs())) for v in kept_times]
+        assert torch.allclose(t[b, idx], kept_times, atol=1e-5)
+        assert idx == sorted(idx) and idx[-1] == T - 1
+    # compacted positions would give integer steps of 0.1 s; real times do not
+    assert not torch.allclose(rel[0, :int(valid[0].sum())] % 0.1, torch.zeros(1, dtype=torch.float64), atol=1e-6)
+
+
+@pytest.mark.parametrize("kind", ["lstm", "cfc"])
+def test_existing_models_ignore_the_relative_times(kind):
+    m = model(kind).eval()
+    f, dt, valid, rel = batch([10, 4])
+    with torch.no_grad():
+        assert torch.equal(m(f, dt, valid), m(f, dt, valid, rel))
+        assert torch.equal(m(f, dt, valid, rel), m(f, dt, valid, 7 * rel))
+
+
+def test_transformer_trains_one_step_without_nan():
+    m = model().float()
+    f, dt, valid, rel = (x.float() if x.is_floating_point() else x for x in batch([10, 5, 1]))
+    opt = torch.optim.AdamW(m.parameters(), lr=1e-3)
+    loss = (m(f, dt, valid, rel) ** 2).mean()
+    loss.backward()
+    assert all(torch.isfinite(p.grad).all() for p in m.parameters() if p.grad is not None)
+    opt.step()
+    assert math.isfinite(float(loss.detach()))
+
+
+def test_the_test_split_never_trains(tmp_path):
+    """--split-name test must refuse an unfinished (or missing) checkpoint instead of training on
+    the test windows as validation."""
+    from types import SimpleNamespace
+    args = SimpleNamespace(ode_unfolds=6, compile_ltc=False, dt_unit=1.0, time_code="real", out=str(tmp_path), patience=8, epochs=60,
+                           split_name="test", stage="final", swanlab="off", batch=4, keep_rates=[1.0])
+
+    class Tiny:
+        device, n = "cpu", 1
+
+        def labels(self):
+            return np.zeros(1)
+
+    with pytest.raises(SystemExit, match="refusing to train"):
+        sparse_run.train("lstm", Tiny(), Tiny(), np.zeros(1), 3e-4, 0, args, 0.0, 1.0, DIM, "t")
+
+
+@pytest.mark.parametrize("kind", ["lstm", "cfc"])
+def test_dt_unit_default_is_the_registered_behaviour_and_otherwise_just_rescales(kind):
+    """Time-unit exploration: dt_unit=1.0 must leave the registered sparse-observation model exactly
+    as it was; any other unit is the same as feeding dt / unit."""
+    f, dt, valid, rel = batch([10, 6])
+    ref = model(kind).eval()
+    unit = model(kind).eval()
+    unit.dt_unit = 0.099875
+    same = model(kind).eval()
+    same.dt_unit = 1.0
+    with torch.no_grad():
+        assert torch.equal(same(f, dt, valid, rel), ref(f, dt, valid, rel))
+        assert torch.allclose(unit(f, dt, valid, rel), ref(f, dt / 0.099875, valid, rel), atol=1e-12)
+        assert not torch.allclose(unit(f, dt, valid, rel), ref(f, dt, valid, rel))
+
+
+# --- exploratory time-code ablation ---
+
+def _tmodel(mode):
+    torch.manual_seed(0)
+    return sparse_run.SteeringModel("transformer", DIM, seed=0, time_code=mode).double()
+
+
+def test_ablation_variants_have_the_same_parameters():
+    assert {m: _tmodel(m).blocks()["temporal"] for m in ("real", "index", "none")} == \
+        {"real": 33_472, "index": 33_472, "none": 33_472}
+    assert set(_tmodel("real").state_dict()) == set(_tmodel("none").state_dict())
+
+
+def test_index_code_equals_real_code_on_a_regular_full_window():
+    T = 10
+    f = torch.randn(2, T, DIM, generator=torch.Generator().manual_seed(3), dtype=torch.float64)
+    rel = ((torch.arange(T, dtype=torch.float64) - (T - 1)) * 0.1).expand(2, T).clone()
+    valid = torch.ones(2, T, dtype=torch.bool)
+    dt = torch.full((2, T), 0.1, dtype=torch.float64)
+    real, idx = _tmodel("real").eval(), _tmodel("index").eval()
+    idx.load_state_dict(real.state_dict())
+    with torch.no_grad():
+        assert torch.allclose(real(f, dt, valid, rel), idx(f, dt, valid, rel), atol=1e-9)
+
+
+@pytest.mark.parametrize("mode", ["index", "none"])
+def test_ablations_do_not_read_real_times(mode):
+    m = _tmodel(mode).eval()
+    f, dt, valid, rel = batch([10, 6, 3])
+    with torch.no_grad():
+        assert torch.equal(m(f, dt, valid, rel), m(f, dt, valid, 3 * rel - 1))
+
+
+def test_index_code_loses_the_gaps_that_real_time_keeps():
+    f, dt, valid, rel = batch([6])
+    real, idx = _tmodel("real").eval(), _tmodel("index").eval()
+    idx.load_state_dict(real.state_dict())
+    stretched = rel.clone()
+    stretched[:, :5] *= 2.0                       # same order, twice the gaps
+    with torch.no_grad():
+        assert not torch.allclose(real(f, dt, valid, rel), real(f, dt, valid, stretched))
+        assert torch.equal(idx(f, dt, valid, rel), idx(f, dt, valid, stretched))
+
+
+@pytest.mark.parametrize("mode", ["index", "none"])
+def test_padding_cannot_leak_in_the_ablations(mode):
+    m = _tmodel(mode).eval()
+    f, dt, valid, rel = batch([10, 6, 3])
+    f2 = f.clone()
+    f2[~valid] = 1e3 * torch.randn(int((~valid).sum()), DIM, dtype=torch.float64)
+    with torch.no_grad():
+        assert torch.allclose(m(f2, dt, valid, rel), m(f, dt, valid, rel), atol=1e-10)
