@@ -47,10 +47,12 @@ Selected learning rates:
 
 The original drivers are [`sparse_run.py`](../experiments/sparse_run.py) for
 current angles and [`anticipation_run.py`](../experiments/anticipation_run.py)
-for the four anticipation horizons. For each model, the `lr` stage selects the
-learning rate on validation data; the `final` stage uses that rate across the
-specified seeds. Both drivers default to the validation split. To match the
-reported current-angle LTC runs, pass `--ode-unfolds 24` to `sparse_run.py`.
+for the four anticipation horizons. The `lr` stage records the selected rate in
+the `chosen_lr` field of its output JSON. For either driver, pass that value
+explicitly with `--lr` when running `--stage final`, for example `--lr 3e-4`
+for the reported current-angle LSTM. Both drivers default to the validation
+split. To match the reported current-angle LTC runs, pass `--ode-unfolds 24`
+to `sparse_run.py`.
 Keep outputs outside the repository.
 
 For one seed and learning rate, `training.fit` saves the selected model with
@@ -74,7 +76,9 @@ Secondary comparisons used Holm correction. The analyses of saved predictions
 are in [`sparse_analyze.py`](../experiments/sparse_analyze.py) for current angles
 and [`anticipation_analyze.py`](../experiments/anticipation_analyze.py) for
 anticipation. [`sparse_cost.py`](../experiments/sparse_cost.py) measures the
-computational cost of the LSTM, CfC and LTC temporal blocks.
+computational cost of the LSTM, CfC and LTC temporal blocks. Before running it,
+copy each model's `<model>_lr.json` from an untagged `sparse_run.py` sweep to
+`<model>_lr_chosen.json` in the directory supplied as `--ckpt-dir`.
 
 ## Interpretation and reproduction limits
 
