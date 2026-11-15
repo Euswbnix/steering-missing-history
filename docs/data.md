@@ -68,8 +68,19 @@ The visual encoder is frozen DINOv2 ViT-B/14. Resize RGB frames to width 392 and
 height 224, scale to `[0,1]`, then normalise channels by mean `(0.485, 0.456, 0.406)`
 and standard deviation `(0.229, 0.224, 0.225)`. Concatenate the normalised CLS token
 and mean of normalised patch tokens to obtain 1536 features per frame. Cache
-camera-aligned observations at 10 Hz. The image encoder and raw-data preparation
-are implemented by the user of this core package.
+camera-aligned observations at 10 Hz. The scripts in `preprocessing/` implement
+this preparation from the raw HDD release; their extra dependencies are in
+`requirements-preprocessing.txt`. Run them in this order:
+
+1. `audit_sessions.py` and `timestamp_gaps.py`: session, CAN and timestamp checks
+2. `extract_features.py --stride 10`: features for the synchronisation check
+3. `sync_check.py`: frame-to-steering alignment per session
+4. `geo_split_feasibility.py` and `make_split.py`: the route-group split
+5. `extract_features.py --stride 1`: features for every frame
+6. `make_cache.py`: the 10 Hz cache read by training and evaluation
+
+Each script's docstring lists its inputs and outputs. The scripts refuse to write
+inside a git working tree, so HDD-derived files stay out of the repository.
 
 ## Inference inputs
 

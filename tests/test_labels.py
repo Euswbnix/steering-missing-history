@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 import data as A
-import models.steering as D
+import models.steering as steering
 
 
 def steer_of(t):
@@ -50,7 +50,7 @@ def test_labels_are_void_across_gaps_bad_values_backward_clocks_and_the_end():
 
 def test_single_frame_model_sees_only_the_current_frame():
     torch.manual_seed(0)
-    m = D.SteeringModel("single_frame", 16, n_out=4).double().eval()
+    m = steering.SteeringModel("single_frame", 16, n_out=4).double().eval()
     assert m.blocks()["temporal"] == 33_088
     f = torch.randn(3, 10, 16, dtype=torch.float64)
     valid = torch.arange(10)[None] < torch.tensor([10, 6, 3])[:, None]

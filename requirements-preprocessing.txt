@@ -1,0 +1,6 @@
+# Extra packages for the scripts in preprocessing/, as used on the machine that produced the
+# reported results. extract_features.py also loads DINOv2 through torch.hub.
+-r requirements.txt
+pandas==2.3.3
+scipy==1.15.3
+opencv-python-headless==5.0.0.93
