@@ -1,9 +1,11 @@
 # Reported results
 
 These tables summarise completed experiments. They were not rerun by the core-code
-refactor. All values are macro MAE in steering-wheel degrees, averaged over eight
-training seeds. See [experiments.md](experiments.md) for configuration, scope and
-statistical qualifications.
+refactor. Errors are macro MAE in steering-wheel degrees. The original current-angle
+and anticipation test results average eight training seeds. The final section
+reports a separate, exploratory validation comparison with three paired seeds per
+model. See [experiments.md](experiments.md) for the original experiment settings
+and statistical qualifications.
 
 ## Current-angle prediction
 
@@ -60,3 +62,110 @@ correction; this is not evidence of equivalence. LTC is worse and the Transforme
 is better in the corresponding secondary comparisons. The extension reused
 sessions already tested for current-angle prediction, which limits claims about
 an untouched holdout.
+
+## History-dropping training comparison (exploratory validation)
+
+This comparison contains 24 completed current-angle runs: four models, two
+training conditions and seeds 0, 1 and 2 in each condition. Random-drop training
+samples a history-retention rate for each minibatch; full-history training always
+retains the history. Both conditions were evaluated on the same 188,961 validation
+windows. The test split was not evaluated. These results are separate from the
+eight-seed test results above. The [training protocol](no_drop_training.md)
+documents the settings, original source revision and post-run additions.
+
+### Evaluation
+
+Both training conditions use the same checkpoint-selection rule: the lowest
+qualifying validation macro MAE averaged over 100%, 50% and 25% history retention.
+Selection uses one fixed mask, seed 7, at each sparse retention rate. Training
+stops after eight epochs without a score decrease greater than 1e-6 degrees,
+with a maximum of 60 epochs.
+
+Final scoring evaluates the selected checkpoint once at 100% retention and with
+five masks at each sparse rate, using seeds 7, 1007, 2007, 3007 and 4007. Scores
+are averaged across masks within a training seed before averaging the three
+training seeds. Retention is the probability of keeping each history frame;
+the current frame is always retained. Macro MAE averages the MAEs of the nonempty
+absolute-angle bins [0, 5), [5, 15) and [15, infinity) degrees with equal weight.
+
+The primary retention condition for this exploratory comparison is 25%; 50% and
+100% are secondary conditions. In the tables, delta is full-history training
+minus random-drop training. A positive delta means random-drop training had
+lower validation macro MAE under the specified learning-rate settings. All
+differences are computed before rounding.
+
+### Mean validation macro MAE
+
+| Model | History retained | Random-drop training (degrees) | Full-history training (degrees) | Delta (degrees) |
+|---|---:|---:|---:|---:|
+| LSTM | 100% | 15.178 | 14.994 | -0.184 |
+| LSTM | 50% | 15.283 | 15.666 | +0.382 |
+| LSTM | 25% | 15.706 | 17.104 | +1.398 |
+| CfC | 100% | 17.851 | 17.643 | -0.208 |
+| CfC | 50% | 16.575 | 18.279 | +1.704 |
+| CfC | 25% | 16.360 | 20.999 | +4.639 |
+| LTC | 100% | 19.099 | 19.896 | +0.797 |
+| LTC | 50% | 19.199 | 21.554 | +2.355 |
+| LTC | 25% | 19.631 | 23.569 | +3.938 |
+| Transformer | 100% | 14.744 | 15.040 | +0.296 |
+| Transformer | 50% | 14.861 | 15.283 | +0.423 |
+| Transformer | 25% | 15.218 | 15.933 | +0.715 |
+
+### Paired differences by training seed
+
+| Model | History retained | Seed 0 delta (degrees) | Seed 1 delta (degrees) | Seed 2 delta (degrees) |
+|---|---:|---:|---:|---:|
+| LSTM | 100% | +0.017 | -0.135 | -0.435 |
+| LSTM | 50% | +0.559 | +0.537 | +0.051 |
+| LSTM | 25% | +1.620 | +1.750 | +0.824 |
+| CfC | 100% | -0.247 | -0.153 | -0.222 |
+| CfC | 50% | +1.517 | +1.753 | +1.842 |
+| CfC | 25% | +4.252 | +4.582 | +5.083 |
+| LTC | 100% | +3.417 | -0.627 | -0.399 |
+| LTC | 50% | +4.715 | +1.506 | +0.843 |
+| LTC | 25% | +6.181 | +3.093 | +2.541 |
+| Transformer | 100% | +0.642 | +0.296 | -0.050 |
+| Transformer | 50% | +0.812 | +0.390 | +0.067 |
+| Transformer | 25% | +1.216 | +0.606 | +0.322 |
+
+### Error increase from 100% to 25% retention
+
+Each increase is macro MAE at 25% retention minus macro MAE at 100%, averaged
+over the three seeds. A negative value means the error decreased. The final
+column compares those increases between the two training conditions.
+
+| Model | Random-drop training (degrees) | Full-history training (degrees) | Full minus random (degrees) |
+|---|---:|---:|---:|
+| LSTM | +0.528 | +2.110 | +1.582 |
+| CfC | -1.491 | +3.356 | +4.847 |
+| LTC | +0.532 | +3.673 | +3.141 |
+| Transformer | +0.474 | +0.893 | +0.419 |
+
+### Interpretation and limitations
+
+At 25% retention, random-drop training reduced mean validation macro MAE by
+1.398 degrees for LSTM, 4.639 for CfC, 3.938 for LTC and 0.715 for Transformer.
+It had lower error in all 12 same-seed model comparisons at 25% retention and
+also in all 12 at 50% retention.
+
+At 100% retention, random-drop training was slightly worse on average for LSTM
+(MAE higher by 0.184 degrees) and CfC (higher by 0.208 degrees). LSTM favoured
+full-history training in two of three seeds, and CfC in all three. LTC's mean
+improvement of 0.797 degrees was driven by seed 0, which improved by 3.417 degrees;
+seeds 1 and 2 instead became worse by 0.627 and 0.399 degrees. Transformer improved
+by 0.296 degrees on average, but its seed 2 result was slightly worse. Random-drop
+training was therefore not uniformly better across retention rates or seeds.
+
+Both conditions reused learning rates selected under random-drop training in the
+original experiments: LSTM and Transformer 3e-4, CfC 1e-4 and LTC 1e-3.
+Full-history training was not tuned independently, and no additional learning-rate
+sweep was performed for this comparison. Differences may partly depend on that
+choice, so these results compare the policies under fixed settings rather than
+their best performance after separate tuning.
+
+This is a three-seed exploratory validation comparison. No confidence intervals,
+p-values or formal equivalence tests were computed for it. The original study's
+0.5-degree margin is only a reference scale here; neither a small mean difference
+nor three same-sign paired differences establishes statistical significance or
+equivalence. The observed validation differences do not establish a test-set
+improvement.

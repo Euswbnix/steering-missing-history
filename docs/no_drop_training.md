@@ -1,12 +1,17 @@
 # Does dropping history frames during training improve steering predictions?
 
-Exploratory validation protocol, 11 November 2026. Train two current-angle
+Initial exploratory validation protocol: 11 November 2026. The source-revision
+audit and learning-rate limitations were added after the experiments, on
+16 November 2026. Both are marked as post-run additions below; they were not
+part of the initial protocol.
+
+Train two current-angle
 models from scratch for each architecture and seed with the public
 `training.fit` API. One uses random history dropping and one always sees the
 full history. Both runs in a pair start from the same seed. All 24 runs use the
 same train and validation route split. The test split stays sealed.
 
-## Source revision
+## Source revision (post-run addition, 16 November 2026)
 
 The 24 runs used a working tree based on commit
 `12992866a491cce6c770979b3cfeb65ca8d953bf` (`Add README (#3)`), with changes to
@@ -56,10 +61,14 @@ completed history entry for progress monitoring, not a resumable checkpoint.
 | LTC | 1e-3 | 0, 1, 2 |
 | Transformer | 3e-4 | 0, 1, 2 |
 
-These learning rates were selected under random-drop training in the original
-experiments and then reused for both conditions. Full-history training was not
-tuned independently in these 24 runs, which limits conclusions about the best
-performance achievable under each training policy.
+**Post-run addition, 16 November 2026: learning-rate limitations.**
+For each model, both training conditions used the learning rate selected under
+random-drop training in the original experiments. Full-history training was not
+tuned independently, and no additional learning-rate sweep was performed for
+this comparison. The observed differences may therefore partly depend on the
+learning-rate choice. These results compare the two training policies under the
+stated fixed settings; they do not establish the best performance each policy
+could achieve after separate tuning.
 
 For both conditions, keep the default training rates `(1.0, 0.5, 0.25)` and set
 `validation_keep_rates=(1.0, 0.5, 0.25)`. In the random-drop run, use the
@@ -92,7 +101,8 @@ nonempty absolute steering-angle bin. The bins are below 5°, 5° to below 15°,
 and 15° or more. Average masks within a seed before averaging the three seeds. For each
 architecture and retention rate, show both condition means and all three
 same-seed differences (full-history training minus random-drop training).
-A positive difference means random dropping improved validation accuracy.
+A positive difference means random-drop training had lower validation macro MAE
+under the specified learning-rate settings.
 
 Use 25% retention for the primary comparison within each architecture. Report
 50% and 100% as secondary comparisons, and show how much each condition's
