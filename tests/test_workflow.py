@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 import torch
 
+import training
 from data import FeatureCache
 from inference import Predictor
 from metrics import macro_mae
@@ -74,6 +75,80 @@ def test_fit_rejects_test_selection_and_existing_checkpoint(tmp_path):
     assert path.read_bytes() == b"preserve existing file"
 
 
+def test_full_history_override_keeps_mixed_run_batch_order_and_validation(tmp_path, monkeypatch):
+    cache = make_cache(tmp_path / "cache", n=25)
+    train, val = [FeatureCache(cache, split, steps=6) for split in ("train", "val")]
+    rates = (1.0, 0.5, 0.25)
+    original = training.forward_masked
+
+    def trace_run(override):
+        batches, train_rates, val_rates = [], [], []
+
+        def trace_forward(model, features, timestamps, keep, generator):
+            if model.training:
+                batches.append(timestamps[:, -1].tolist())
+                train_rates.append(keep)
+            else:
+                val_rates.append(keep)
+            return original(model, features, timestamps, keep, generator)
+
+        config = TrainConfig(epochs=2, batch_size=5, keep_rates=rates, validation_keep_rates=rates,
+                             train_keep_override=override)
+        with monkeypatch.context() as patch:
+            patch.setattr(training, "forward_masked", trace_forward)
+            fit("lstm", train, val, config=config)
+        return batches, train_rates, val_rates
+
+    mixed_batches, mixed_rates, mixed_val = trace_run(None)
+    full_batches, full_rates, full_val = trace_run(1.0)
+    assert len(mixed_batches) == 8  # Four batches in each of two shuffled epochs.
+    assert full_batches == mixed_batches
+    assert min(mixed_rates) < 1.0
+    assert set(full_rates) == {1.0}
+    assert mixed_val == full_val == list(rates) * 2
+
+
+@pytest.mark.parametrize("validation_rates, expected", [(None, (1.0,)), ((1.0, 0.5, 0.25), (1.0, 0.5, 0.25))])
+def test_selection_uses_configured_rates_or_falls_back_to_training_rates(tmp_path, monkeypatch,
+                                                                        validation_rates, expected):
+    cache = make_cache(tmp_path / "cache", n=25)
+    train, val = [FeatureCache(cache, split, steps=6) for split in ("train", "val")]
+    observed = []
+
+    def score(model, data, mean, std, keep_rates):
+        observed.append(keep_rates)
+        return 1.0
+
+    monkeypatch.setattr(training, "validation_score", score)
+    config = TrainConfig(epochs=1, keep_rates=(1.0,), validation_keep_rates=validation_rates)
+    fit("lstm", train, val, config=config)
+    assert observed == [expected]
+
+
+@pytest.mark.parametrize("settings", [{"validation_keep_rates": ()}, {"validation_keep_rates": (np.nan,)},
+                                      {"train_keep_override": -0.1}, {"train_keep_override": np.nan}])
+def test_invalid_retention_settings_are_rejected(settings):
+    with pytest.raises(ValueError, match=next(iter(settings))):
+        TrainConfig(**settings).validate()
+
+
+def test_epoch_callback_observes_early_stop_without_mutating_history(tmp_path, monkeypatch):
+    cache = make_cache(tmp_path / "cache", n=25)
+    train, val = [FeatureCache(cache, split, steps=6) for split in ("train", "val")]
+    monkeypatch.setattr(training, "validation_score", lambda *args: 2.0)
+    observed = []
+
+    def record(row):
+        observed.append(row.copy())
+        row.clear()
+
+    config = TrainConfig(epochs=5, patience=1)
+    checkpoint = fit("lstm", train, val, config=config, on_epoch=record)
+    assert observed == checkpoint["history"]
+    assert [row["epoch"] for row in observed] == [1, 2]
+    assert all(row["val_macro_mae"] == 2.0 and np.isfinite(row["train_loss"]) for row in observed)
+
+
 def test_cache_common_targets_order_and_no_cross_session_windows(tmp_path):
     cache = make_cache(tmp_path / "cache")
     data = FeatureCache(cache, "train", task="anticipation", steps=6)
@@ -126,7 +201,8 @@ def test_numpy_settings_still_save_a_loadable_checkpoint(tmp_path):
     train = FeatureCache(cache, "train", steps=6, max_step=max_step)
     val = FeatureCache(cache, "val", steps=6, max_step=max_step)
     config = TrainConfig(lr=np.float64(3e-4), seed=np.int64(3), epochs=1, patience=1,
-                         batch_size=64, keep_rates=tuple(np.array([1.0, 0.5, 0.25])))
+                         batch_size=64, keep_rates=tuple(np.array([1.0, 0.5, 0.25])),
+                         validation_keep_rates=(np.float64(0.5),), train_keep_override=np.float64(1.0))
     path = tmp_path / "outputs" / "lstm.pt"
     checkpoint = fit("lstm", train, val, config=config, checkpoint_path=path)
     loaded = Predictor(path)
@@ -134,4 +210,6 @@ def test_numpy_settings_still_save_a_loadable_checkpoint(tmp_path):
     np.testing.assert_array_equal(loaded.predict(f, t), Predictor(checkpoint).predict(f, t))
     assert type(checkpoint["train_config"]["lr"]) is float
     assert type(checkpoint["train_config"]["seed"]) is int
+    assert type(checkpoint["train_config"]["validation_keep_rates"][0]) is float
+    assert type(checkpoint["train_config"]["train_keep_override"]) is float
     assert type(checkpoint["data_config"]["max_step"]) is float
