@@ -6,14 +6,14 @@ import numpy as np
 import pytest
 import torch
 
-import models.steering as D
+import models.steering as steering
 
 DIM = 1536
 
 
 def model(kind="transformer", seed=0):
     torch.manual_seed(seed)
-    return D.SteeringModel(kind, DIM, seed=seed).double()
+    return steering.SteeringModel(kind, DIM, seed=seed).double()
 
 
 def batch(lengths, T=10, seed=1):
@@ -44,7 +44,7 @@ def test_transformer_parameter_counts():
 
 
 def test_real_time_sinusoid():
-    blk = D.TransformerBlock()
+    blk = steering.TransformerBlock()
     rel = torch.tensor([[-2.35, -0.4, 0.0]])
     code = blk.time_code(rel)
     p = rel / 0.1
@@ -52,7 +52,8 @@ def test_real_time_sinusoid():
         w = 10000 ** (2 * j / 64)
         assert torch.allclose(code[..., 2 * j], torch.sin(p / w), atol=1e-5)
         assert torch.allclose(code[..., 2 * j + 1], torch.cos(p / w), atol=1e-5)
-    assert not any(n.startswith("rnn.inv_freq") for n in D.SteeringModel("transformer", DIM).state_dict())
+    names = steering.SteeringModel("transformer", DIM).state_dict()
+    assert not any(n.startswith("rnn.inv_freq") for n in names)
 
 
 @pytest.mark.parametrize("train_mode", [False, True])
@@ -101,7 +102,7 @@ def test_times_after_dropping_are_the_real_ones_and_the_target_is_kept():
         return torch.zeros(len(kf))
 
     gen = torch.Generator().manual_seed(7)
-    D.forward_masked(spy, f, t, 0.25, gen)
+    steering.forward_masked(spy, f, t, 0.25, gen)
     valid, rel = seen["valid"], seen["rel"].double()
     last = valid.long().cumsum(1).argmax(1)
     assert valid.all(1).logical_not().any()               # frames really were dropped
@@ -140,7 +141,7 @@ def test_transformer_trains_one_step_without_nan():
 
 @pytest.mark.parametrize("kind", ["lstm", "cfc"])
 def test_dt_unit_default_and_explicit_rescaling(kind):
-    """docs/explore_2026-09-26_dt_units.md: dt_unit=1.0 must leave the registered sparse-observation model exactly
+    """Time-unit exploration: dt_unit=1.0 must leave the registered sparse-observation model exactly
     as it was; any other unit is the same as feeding dt / unit."""
     f, dt, valid, rel = batch([10, 6])
     ref = model(kind).eval()
@@ -156,7 +157,7 @@ def test_dt_unit_default_and_explicit_rescaling(kind):
 
 def _tmodel(mode):
     torch.manual_seed(0)
-    return D.SteeringModel("transformer", DIM, seed=0, time_code=mode).double()
+    return steering.SteeringModel("transformer", DIM, seed=0, time_code=mode).double()
 
 
 def test_ablation_variants_have_the_same_parameters():
