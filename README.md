@@ -95,6 +95,26 @@ Inference needs no steering labels, speed or data split. To predict a whole
 prepared split, use `FeatureCache.batches()` in your own driver and keep the same
 batch order as `FeatureCache.labels()` when scoring.
 
+## Training curves
+
+These curves show the final Transformer runs at the selected learning rate:
+`3e-4` for current-angle prediction and `1e-4` for anticipation. Seed 0 is blue;
+seeds 1–7 are gray. The circle marks seed 0's selected checkpoint.
+
+![Transformer current-angle training loss and validation selection score.](figures/transformer_current_training.png)
+
+![Transformer anticipation training loss and validation selection score.](figures/transformer_anticipation_training.png)
+
+The left panels show minibatch-averaged MSE on standardised targets. The right
+panels show validation macro MAE in degrees, averaged over 100%, 50% and 25%
+history retention. Anticipation training includes all four outputs; its validation
+selection score averages only the 0.5, 1 and 2 s horizons. Lines use the recorded
+epochs without smoothing or averaging across seeds.
+
+See [curve sources and plotting instructions](docs/training_curves.md) for metric
+details and vector figures. The [LSTM reproduction check](docs/lstm_reproduction.md)
+documents the separate investigation of the 0.36-degree validation difference.
+
 ## Layout
 
 - `models/cfc.py`: handwritten CfC cell and sequence wrapper.
