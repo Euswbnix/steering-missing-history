@@ -5,8 +5,15 @@ This release summary documents the settings used by the
 
 ## Data and models
 
-Honda HDD driving sessions are held out in whole route groups, so train, validation
-and test do not share a route group. Do not replace this with random windows.
+Honda HDD driving sessions are held out whole: all windows from one session are in
+the same split, so train, validation and test never share a session. Do not replace
+this with random windows. Route groups, sessions that drive over the same roads, are
+used for statistics, not for the split. The largest route group has sessions in all
+three splits: 56 in train, 2 in validation and 4 in test. Validation is closer to the
+training routes than test: 21.3% of validation frames and 6.7% of test frames lie
+within 50 m of a training track. These shares count every recorded frame of the
+validation and test sessions that have GPS, stationary frames included, and use the
+distance to the nearest point of the training sessions' 1 Hz GPS tracks.
 The sparse-observation test set contains 21 sessions in 16 route groups, with
 402,711 valid target frames. The anticipation test set retains the common targets
 valid at all four horizons: 400,457 frames in those same sessions.
