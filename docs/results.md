@@ -2,9 +2,9 @@
 
 These tables summarise completed experiments. They were not rerun by the core-code
 refactor. Errors are macro MAE in steering-wheel degrees. The original current-angle
-and anticipation test results average eight training seeds. The final section
-reports a separate, exploratory validation comparison with three paired seeds per
-model. See [experiments.md](experiments.md) for the original experiment settings
+and anticipation test results average eight training seeds. The last two sections
+are separate, exploratory validation analyses: a training comparison with three
+paired seeds per model, and a check on windows with naturally missing frames. See [experiments.md](experiments.md) for the original experiment settings
 and statistical qualifications.
 
 ## Current-angle prediction
@@ -169,3 +169,43 @@ p-values or formal equivalence tests were computed for it. The original study's
 nor three same-sign paired differences establishes statistical significance or
 equivalence. The observed validation differences do not establish a test-set
 improvement.
+
+## Windows with naturally missing frames (exploratory validation)
+
+Some windows already have missing frames in the original recordings: somewhere in
+the 30-frame window, two neighbouring frames are more than 0.2 s apart. The main
+evaluation leaves these windows out. This check scores them separately, using the
+eight-seed current-angle checkpoints with full history, so no frames are dropped
+on top of the real gaps. It uses the validation split only and was run after the
+test split was sealed; the test split was not evaluated. It is exploratory. The
+[plan](natural_gap_plan.md) was written before the run.
+
+The validation split has 188,961 ordinary windows and 1,855 windows with missing
+frames, about 1%. The windows with missing frames come from only 5 of the 7
+validation route groups, and in every one of them the largest gap is between 0.2
+and 0.5 s. Before scoring, each model's restored checkpoint reproduced its stored
+validation predictions on one session to within 3.85e-4 degrees.
+
+| Model (learning rate) | Missing-frame windows | Ordinary windows | Missing-frame minus reweighted ordinary | All windows minus ordinary |
+|---|---:|---:|---:|---:|
+| LSTM (3e-4) | 15.96 ± 0.73 | 15.44 ± 0.20 | +2.37 [-2.58, +6.45] | -0.001 [-0.076, +0.117] |
+| CfC (1e-4) | 16.74 ± 0.73 | 17.42 ± 0.41 | +1.47 [-4.31, +5.00] | -0.019 [-0.096, +0.084] |
+| LTC (1e-3) | 15.55 ± 1.42 | 18.55 ± 0.67 | -0.75 [-4.98, +1.18] | -0.059 [-0.122, -0.005] |
+| Transformer (3e-4) | 15.46 ± 0.49 | 14.76 ± 0.24 | +2.40 [-1.39, +5.29] | -0.000 [-0.051, +0.068] |
+
+Scores are macro MAE in degrees, the mean ± standard deviation over the eight
+seeds. Brackets are 95% intervals from resampling whole route groups (2,000
+draws). "Reweighted ordinary" gives the ordinary windows the same speed mix as the
+missing-frame windows within each angle bin. "All windows minus ordinary" is how
+much the reported score would change if the missing-frame windows were kept.
+
+Leaving these windows out did not make the reported score look better: adding them
+back changes it by at most 0.06 degrees for every model, because they are so few.
+Whether real missing frames make the error larger is unclear, since every interval
+in the reweighted comparison includes zero. The model order also differs: LTC is
+last on ordinary windows but second on missing-frame windows. We do not read
+anything into this, because LTC's score on those windows varies the most between
+seeds (standard deviation 1.42 degrees).
+
+The check covers only 5 route groups and gaps of at most 0.5 s, so it says nothing
+about longer interruptions. The Transformer results stay descriptive, as above.

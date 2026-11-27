@@ -10,6 +10,11 @@ The reported results were produced with the original scripts in
 and [`inference.py`](inference.py) provide equivalent training and prediction
 interfaces with a simpler checkpoint format.
 
+The final model is the Transformer for current-angle prediction, with learning
+rate 3e-4. We fixed this setting only after we had seen the validation results of
+the other models, so its comparisons with those models are descriptive, not
+confirmatory.
+
 ## Installation
 
 Use Python 3.10 or newer. Install a PyTorch build for your platform, then:
@@ -103,9 +108,15 @@ batch order as `FeatureCache.labels()` when scoring.
 - `training.py`: train one configuration and select its best validation weights.
 - `inference.py`: restore the model and return predictions in degrees.
 - `metrics.py`: the macro MAE used for checkpoint selection.
-- `experiments/`: original training, evaluation, statistical analysis and timing scripts.
+- `experiments/`: original training, evaluation, statistical analysis and timing scripts,
+  and the evaluation of windows with naturally missing frames (`natural_gap_eval.py`).
+- `scripts/`: analysis of finished runs: test-set examples (`pick_examples.py`), training
+  curves (`plot_training_curves.py`), data statistics (`data_stats.py`) and the
+  history-dropping comparison (`run_history_comparison.py`). They write their output
+  outside the repository; figures stay with the licensed data.
 - `docs/`: [input format](docs/data.md), [architectures](docs/models.md),
-  [experiment settings](docs/experiments.md) and [reported results](docs/results.md).
+  [experiment settings](docs/experiments.md), [reported results](docs/results.md) and the
+  [natural missing-frame plan](docs/natural_gap_plan.md).
 
 ## Verification
 

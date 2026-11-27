@@ -1,10 +1,22 @@
 import argparse
 import json
 import os
+import sys
 
 import numpy as np
 
 MOVING, STEPS, MAX_STEP, TURN = 3.0, 30, 0.2, 15.0
+
+
+def refuse_inside_git(path):
+    d = os.path.abspath(path)
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            sys.exit(f"refusing to write HDD-derived output inside a git working tree ({d})")
+        parent = os.path.dirname(d)
+        if parent == d:
+            return
+        d = parent
 
 
 def targets(cache, split, steps=STEPS, max_step=MAX_STEP):
@@ -98,12 +110,16 @@ def main():
     ap.add_argument("--percentile", type=float, default=95.0, help="percentile for the representative failure")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    refuse_inside_git(a.out)
     os.makedirs(a.out, exist_ok=True)
     os.chmod(a.out, 0o700)
 
     z = np.load(a.pred, allow_pickle=False)
     pred = z[a.key].astype(np.float64)
     items = targets(a.cache, a.split)
+    y = np.concatenate([it["y"] for it in items]) if items else np.empty(0, np.float32)
+    if len(z["y"]) != len(y) or len(pred) != len(y) or not np.allclose(z["y"], y, atol=1e-4):
+        sys.exit("pred file is not aligned with the rebuilt target windows")
     rows = segments(items, pred, a.seconds, a.min_targets, a.turn_share)
     turning = [r for r in rows if r["turn"]]
     good = min(turning, key=lambda r: r["mae"])
